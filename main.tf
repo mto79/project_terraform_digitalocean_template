@@ -9,6 +9,7 @@ module "digitalocean_vm" {
 
   name   = each.value.name
   image  = try(each.value.image, null)
+  domain = try(coalesce(each.value.domain, var.default_domain), null)
   region = try(coalesce(each.value.region, var.default_region), null)
   size   = try(each.value.size, null)
   tags   = try(each.value.tags, [])
@@ -26,16 +27,53 @@ module "digitalocean_vm" {
   user_data  = try(each.value.user_data, null)
   volume_ids = try(each.value.volume_ids, null)
 
-  record_enable = each.value.record_enable
-  record_type = each.value.record_type
-  record_domain = each.value.record_domain
-  record_name = each.value.record_name
-  record_ttl = each.value.record_ttl
-
   ansible_name                 = try(each.value.ansible_name, null)
   ansible_host                 = try(each.value.ansible_host, null)
   ansible_groups               = try(each.value.ansible_groups, null)
   ansible_user                 = try(each.value.ansible_user, null)
   ansible_ssh_pass             = try(each.value.ansible_ssh_pass, null)
   ansible_ssh_private_key_file = try(each.value.ansible_ssh_private_key_file, null)
+}
+
+module "digitalocean_lb" {
+  source  = "github.com/mto79/terraform_digitalocean_lb?ref=v0.0.1"
+
+  for_each = { for i, v in var.digitalocean_lbs : i => v }
+
+  name             = each.value.name
+  domain           = try(coalesce(each.value.domain, var.default_domain), null)
+  project          = try(coalesce(each.value.project, var.default_project), null)
+  region           = try(coalesce(each.value.region, var.default_region), null)
+  droplet_tag      = each.value.droplet_tag
+
+  forwarding_rules = try(each.value.forwarding_rules, null)
+
+  healthcheck = try(each.value.healthcheck, null)
+}
+
+# Create list like:
+# - name: "vm"
+#   value: $vm.value.primary_ipv4_address
+#   type: "A"
+# Ignore the domain, we get it in the DNS code
+locals {
+  dns_records_vms = [for vm_hostname, vm in module.do_vm : {
+    name: length(split(".", vm.name)) > 2 ? join(".", slice(split(".", vm.name), 0, length(split(".", vm.name)) - 2)) : split(".", vm.name)[0]
+    value: vm.ipv4_address,  # Replace with the actual attribute for the primary IPv4 address
+    type: "A"
+  }]
+
+  dns_records_lbs = [for lb_name, lb in module.do_lb : {
+    name: length(split(".", lb.name)) > 2 ? join(".", slice(split(".", lb.name), 0, length(split(".", lb.name)) - 2)) : split(".", lb.name)[0]
+    value: lb.ipv4_address,  # Replace with the actual attribute for the primary IPv4 address
+    type: "A"
+  }]
+}
+
+output "dns_records" {
+  value = concat(local.dns_records_vms, local.dns_records_lbs, var.additional_dns_records)
+}
+
+output "default_domain" {
+  value = var.default_domain
 }
